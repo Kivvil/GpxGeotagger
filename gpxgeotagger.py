@@ -1,7 +1,6 @@
 import gpxpy
 import gpxpy.gpx
 import piexif
-import glob
 import time
 import datetime
 import argparse;
