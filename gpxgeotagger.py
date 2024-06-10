@@ -1,3 +1,4 @@
+from typing import Tuple
 import gpxpy
 import gpxpy.gpx
 import piexif
@@ -9,15 +10,22 @@ from bisect import bisect_left
 
 class PhotoFile:
     # exif_data is the dictionary acquired from piexif. file_path is the path to the file.
-    def __init__(self, file_path, exif_data):
-        self.file_path = file_path
-        self.exif = exif_data
+    def __init__(self, file_path: str, exif_data: gpxpy.gpx.Dict):
+        self.file_path: str = file_path
+        self.exif: gpxpy.gpx.Dict = exif_data
 
         time_string = self.exif['Exif'][piexif.ExifIFD.DateTimeOriginal].decode("utf-8") + " " + jpeg_time_zone_offset
         time_struct = datetime.datetime.strptime(time_string, "%Y:%m:%d %H:%M:%S %z")
-        self.timestamp = (time_struct - datetime.datetime.fromtimestamp(0).replace(tzinfo=timezone.utc)).total_seconds()
+        self.timestamp: int = int((time_struct - datetime.datetime.fromtimestamp(0).replace(tzinfo=timezone.utc)).total_seconds())
 
-def take_closest(pointList, time):
+class Point:
+    def __init__(self, latitude: float, longitude: float, elevation: float, time: int):
+        self.latitude: float = latitude
+        self.longitude: float = longitude
+        self.elevation: float = elevation 
+        self.time: int = time
+
+def take_closest(pointList: list[Point], time: int):
     """
     Assumes pointList is sorted. Returns the index to the closest value to time.
 
@@ -35,7 +43,7 @@ def take_closest(pointList, time):
     else:
         return pos - 1
 
-def decdeg2dms(dd):
+def decdeg2dms(dd: float) -> tuple[float, float, float]:
     mult = -1 if dd < 0 else 1
     mnt,sec = divmod(abs(dd)*3600, 60)
     deg,mnt = divmod(mnt, 60)
@@ -47,26 +55,27 @@ parser = argparse.ArgumentParser(
 parser.add_argument("-g", "--gpx", required=True, nargs='+', help="The GPX file(s) to use. Can be a wildcard pattern, eg. *.gpx")
 parser.add_argument("-j", "--jpeg", required=True, nargs='+', help="JPEG files to geotag. Can be a wildcard pattern, eg. *.jpg")
 parser.add_argument("-t", "--timezone", required=True, help="Timezone the JPEG file exif metadata is in. Eg. +03:00")
+parser.add_argument("-th", "--threshold", required=False, help="The time difference between the GPX point and photo timestamp can be no longer than this in seconds. Default 2 minutes (120 seconds).", default=120.0, type=float)
 args = parser.parse_args()
 
 gpx_files = args.gpx
 jpeg_files = args.jpeg
 jpeg_time_zone_offset = args.timezone
+time_threshold = args.threshold
 
 
 # A list of lists which contain the GPX points with unix timestamp
-gpx_points = []
+gpx_points: list[Point] = []
 
 for file_path in gpx_files:
     with open(file_path, 'r') as gpx_file:
         gpx = gpxpy.parse(gpx_file)
         points = []
-        for point in gpx.walk(only_points=True):
-            point.time = time.mktime(point.time.timetuple())
-            gpx_points.append(point)
+        for gpx_point in gpx.walk(only_points=True):
+            gpx_points.append(Point(gpx_point.latitude, gpx_point.longitude, gpx_point.elevation, int(time.mktime(gpx_point.time.timetuple()))))
 gpx_points.sort(key=lambda point: point.time)
 
-photos = []
+photos: list[PhotoFile] = []
 for file_path in jpeg_files:
     photos.append(PhotoFile(file_path, piexif.load(file_path)))
 
@@ -76,6 +85,10 @@ for photo in photos:
     # Take the closest point of the points found in each track
     closest_point_index = take_closest(gpx_points, photo.timestamp)
     closest_point = gpx_points[closest_point_index]
+    if abs(closest_point.time - photo.timestamp) > time_threshold:
+        print(f"{photo.file_path}: The photo cannot be geotagged because the time difference between the closest GPX track point and the photo timestamp is greater than the threshold ({time_threshold} seconds). You can change the threshold using the --threshold flag. The timezone of the photo files may also be set incorrectly. The time zone can be set using the --timezone flag.\n")
+        continue
+
     has_elevation = closest_point.elevation != None
     if closest_point_index == len(gpx_points) - 1 or closest_point_index == 0 or photo.timestamp == closest_point.time:
         latitude = closest_point.latitude
@@ -119,23 +132,5 @@ for photo in photos:
 
 
     piexif.insert(piexif.dump(photo.exif), photo.file_path)
+    print(f"{photo.file_path}: Geotagged. Time difference between GPX point and the photo timestamp: {abs(closest_point.time - photo.timestamp)} s. \n")
 
-
-
-# def take_closest(myList, myNumber):
-#     """
-#     Assumes myList is sorted. Returns the index to the closest value to myNumber.
-# 
-#     If two numbers are equally close, return the index to the smallest number.
-#     """
-#     pos = bisect_left(myList, myNumber)
-#     if pos == 0:
-#         return 0
-#     if pos == len(myList):
-#         return len(myList) - 1
-#     before = myList[pos - 1]
-#     after = myList[pos]
-#     if after - myNumber < myNumber - before:
-#         return pos
-#     else:
-#         return pos - 1
