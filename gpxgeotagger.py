@@ -1,4 +1,3 @@
-from typing import Tuple
 import gpxpy
 import gpxpy.gpx
 import piexif
@@ -79,14 +78,15 @@ photos: list[PhotoFile] = []
 for file_path in jpeg_files:
     photos.append(PhotoFile(file_path, piexif.load(file_path)))
 
-# Start searching for gpx points whose timestamps match to those of the photos.
+results: list[tuple[str, bool, float]] = []
 
+# Start searching for gpx points whose timestamps match to those of the photos.
 for photo in photos:
     # Take the closest point of the points found in each track
     closest_point_index = take_closest(gpx_points, photo.timestamp)
     closest_point = gpx_points[closest_point_index]
     if abs(closest_point.time - photo.timestamp) > time_threshold:
-        print(f"{photo.file_path}: The photo cannot be geotagged because the time difference between the closest GPX track point and the photo timestamp is greater than the threshold ({time_threshold} seconds). You can change the threshold using the --threshold flag. The timezone of the photo files may also be set incorrectly. The time zone can be set using the --timezone flag.\n")
+        results.append((photo.file_path, False, abs(closest_point.time - photo.timestamp)))
         continue
 
     has_elevation = closest_point.elevation != None
@@ -130,7 +130,21 @@ for photo in photos:
         photo.exif['GPS'][piexif.GPSIFD.GPSAltitudeRef] = 0 if elevation >= 0.0 else 1
         photo.exif['GPS'][piexif.GPSIFD.GPSAltitude] = (int(abs(elevation * 100)), 100)
 
-
     piexif.insert(piexif.dump(photo.exif), photo.file_path)
-    print(f"{photo.file_path}: Geotagged. Time difference between GPX point and the photo timestamp: {abs(closest_point.time - photo.timestamp)} s. \n")
+    results.append((photo.file_path, True, abs(closest_point.time - photo.timestamp)))
+
+geotagged_results = list(filter(lambda result : result[1], results))
+not_geotagged_results = list(filter(lambda result : result[1] == False, results))
+
+print('--- Geotagged photos (time difference between GPX track point and photo timestamp) --- \n')
+for result in geotagged_results:
+    print(f'{result[0]}: {result[2]} s.')
+
+if len(not_geotagged_results) > 0:
+    print('\n--- Not geotagged photos (time difference between GPX track point and photo timestamp) --- \n')
+    for result in not_geotagged_results:
+        print(f'{result[0]}: {result[2]} s.')
+    print(f"Some photos could not be geotagged because the time difference between the closest GPX track point and the photo timestamp is greater than the threshold ({time_threshold} seconds). You can change the threshold using the --threshold flag. The timezone of the photo files may also be set incorrectly. The time zone can be set using the --timezone flag.\n")
+
+
 
